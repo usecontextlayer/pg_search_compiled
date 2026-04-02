@@ -1,0 +1,178 @@
+name: Repackage pg_search
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  push:
+    paths:
+      - ".github/workflows/repackage.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/repackage.yml"
+  workflow_dispatch:
+
+env:
+  PARADEDB_REPO: "paradedb/paradedb"
+  PG_MAJOR: "17"
+
+jobs:
+  check_version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check_release.outputs.new_version }}
+      version: ${{ steps.check_release.outputs.version }}
+    steps:
+      - name: Check for new release
+        id: check_release
+        run: |
+          # Get the latest ParadeDB release tag
+          latest_tag=$(curl -s "https://api.github.com/repos/${{ env.PARADEDB_REPO }}/releases/latest" | jq -r '.tag_name')
+          latest_version=${latest_tag#v}
+          echo "Latest ParadeDB version: $latest_version"
+          echo "version=$latest_version" >> $GITHUB_OUTPUT
+
+          # Get the current version from the latest release of this repo
+          current_version=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.body // ""' | grep -oP 'pg_search v\K[0-9.]+' || echo "")
+          echo "Current repackaged version: $current_version"
+
+          if [[ "$latest_version" != "$current_version" ]]; then
+            echo "new_version=true" >> $GITHUB_OUTPUT
+          else
+            echo "new_version=false" >> $GITHUB_OUTPUT
+          fi
+
+  repackage:
+    needs: check_version
+    if: needs.check_version.outputs.new_version == 'true' || github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            pkg_suffix: arm64_sequoia
+            format: pkg
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            deb_distro: noble
+            deb_arch: amd64
+            format: deb
+
+    steps:
+      - name: Download and repackage (macOS)
+        if: matrix.format == 'pkg'
+        run: |
+          VERSION="${{ needs.check_version.outputs.version }}"
+          PG="${{ env.PG_MAJOR }}"
+          TRIPLE="${{ matrix.triple }}"
+          PKG_NAME="pg_search@${PG}--${VERSION}.${{ matrix.pkg_suffix }}.pkg"
+          DOWNLOAD_URL="https://github.com/${{ env.PARADEDB_REPO }}/releases/download/v${VERSION}/${PKG_NAME}"
+
+          echo "Downloading: $DOWNLOAD_URL"
+          curl -L -o /tmp/pg_search.pkg "$DOWNLOAD_URL"
+
+          # Extract the .pkg
+          pkgutil --expand-full /tmp/pg_search.pkg /tmp/pg_search_expanded
+
+          # Debug: show what's inside
+          echo "=== Extracted contents ==="
+          find /tmp/pg_search_expanded -type f | head -20
+
+          # Create the archive directory structure
+          ARCHIVE_DIR="pg_search-${TRIPLE}-pg${PG}"
+          mkdir -p "${ARCHIVE_DIR}/lib"
+          mkdir -p "${ARCHIVE_DIR}/share/extension"
+
+          # Copy shared library
+          # The .pkg extracts to: Payload/lib/postgresql/pg_search.dylib
+          cp /tmp/pg_search_expanded/Payload/lib/postgresql/pg_search.dylib "${ARCHIVE_DIR}/lib/"
+
+          # Copy extension control and SQL files
+          # The .pkg extracts to: Payload/share/postgresql@{PG}/extension/
+          cp /tmp/pg_search_expanded/Payload/share/postgresql@${PG}/extension/pg_search.control "${ARCHIVE_DIR}/share/extension/"
+          cp /tmp/pg_search_expanded/Payload/share/postgresql@${PG}/extension/pg_search--*.sql "${ARCHIVE_DIR}/share/extension/"
+
+          echo "=== Archive contents ==="
+          find "${ARCHIVE_DIR}" -type f
+
+          # Create zip archive
+          zip -r "pg_search-${TRIPLE}-pg${PG}.zip" "${ARCHIVE_DIR}"
+
+          # Create tar.gz archive
+          tar -czvf "pg_search-${TRIPLE}-pg${PG}.tar.gz" "${ARCHIVE_DIR}"
+
+      - name: Download and repackage (Linux)
+        if: matrix.format == 'deb'
+        run: |
+          VERSION="${{ needs.check_version.outputs.version }}"
+          PG="${{ env.PG_MAJOR }}"
+          TRIPLE="${{ matrix.triple }}"
+          DEB_NAME="postgresql-${PG}-pg-search_${VERSION}-1PARADEDB-${{ matrix.deb_distro }}_${{ matrix.deb_arch }}.deb"
+          DOWNLOAD_URL="https://github.com/${{ env.PARADEDB_REPO }}/releases/download/v${VERSION}/${DEB_NAME}"
+
+          echo "Downloading: $DOWNLOAD_URL"
+          curl -L -o /tmp/pg_search.deb "$DOWNLOAD_URL"
+
+          # Extract the .deb
+          dpkg-deb -x /tmp/pg_search.deb /tmp/pg_search_extracted
+
+          # Debug: show what's inside
+          echo "=== Extracted contents ==="
+          find /tmp/pg_search_extracted -type f | head -20
+
+          # Create the archive directory structure
+          ARCHIVE_DIR="pg_search-${TRIPLE}-pg${PG}"
+          mkdir -p "${ARCHIVE_DIR}/lib"
+          mkdir -p "${ARCHIVE_DIR}/share/extension"
+
+          # Copy shared library
+          # The .deb extracts to: usr/lib/postgresql/{PG}/lib/pg_search.so
+          cp /tmp/pg_search_extracted/usr/lib/postgresql/${PG}/lib/pg_search.so "${ARCHIVE_DIR}/lib/"
+
+          # Copy extension control and SQL files
+          # The .deb extracts to: usr/share/postgresql/{PG}/extension/
+          cp /tmp/pg_search_extracted/usr/share/postgresql/${PG}/extension/pg_search.control "${ARCHIVE_DIR}/share/extension/"
+          cp /tmp/pg_search_extracted/usr/share/postgresql/${PG}/extension/pg_search--*.sql "${ARCHIVE_DIR}/share/extension/"
+
+          echo "=== Archive contents ==="
+          find "${ARCHIVE_DIR}" -type f
+
+          # Create zip archive
+          zip -r "pg_search-${TRIPLE}-pg${PG}.zip" "${ARCHIVE_DIR}"
+
+          # Create tar.gz archive
+          tar -czvf "pg_search-${TRIPLE}-pg${PG}.tar.gz" "${ARCHIVE_DIR}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg_search-${{ matrix.triple }}-pg${{ env.PG_MAJOR }}
+          path: |
+            pg_search-${{ matrix.triple }}-pg${{ env.PG_MAJOR }}.zip
+            pg_search-${{ matrix.triple }}-pg${{ env.PG_MAJOR }}.tar.gz
+
+  release:
+    needs: [check_version, repackage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          echo "=== Release artifacts ==="
+          ls -la artifacts/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          name: v0.${{ env.PG_MAJOR }}.${{ github.run_number }}
+          tag_name: v0.${{ env.PG_MAJOR }}.${{ github.run_number }}
+          body: |
+            pg_search v${{ needs.check_version.outputs.version }} for PostgreSQL ${{ env.PG_MAJOR }}
