@@ -1,37 +1,22 @@
+<div align="center">
+
 # pg_search_compiled
 
-Precompiled packages of [ParadeDB pg_search](https://github.com/paradedb/paradedb) for use with [theseus-rs/postgresql-embedded](https://github.com/theseus-rs/postgresql-embedded).
+Prebuilt [pg_search](https://github.com/paradedb/paradedb) binaries for [postgresql-embedded](https://github.com/theseus-rs/postgresql-embedded).
 
-This repository contains a GitHub Actions workflow that watches ParadeDB releases, downloads the platform-native packages (.pkg for macOS, .deb for Linux), extracts the raw extension files, and repackages them as `.zip` archives with naming conventions compatible with the theseus `postgresql_extensions` crate.
+[![CI](https://github.com/usecontextlayer/pg_search_compiled/actions/workflows/repackage.yml/badge.svg)](https://github.com/usecontextlayer/pg_search_compiled/actions/workflows/repackage.yml) [![Release](https://img.shields.io/github/v/release/usecontextlayer/pg_search_compiled)](https://github.com/usecontextlayer/pg_search_compiled/releases/latest) [![License](https://img.shields.io/github/license/usecontextlayer/pg_search_compiled)](LICENSE)
 
-## Release assets
+</div>
 
-Each release produces archives for the supported platforms:
+This repo doesn't contain source code. A GitHub Actions workflow watches [ParadeDB](https://github.com/paradedb/paradedb) releases, downloads the official pg_search packages, and repackages them into the archive layout that postgresql-embedded expects. If you're looking to use pg_search in your project, see [pgx](https://github.com/usecontextlayer/pgx).
 
-```
-pg_search-aarch64-apple-darwin-pg17.zip
-pg_search-aarch64-apple-darwin-pg17.tar.gz
-pg_search-x86_64-unknown-linux-gnu-pg17.zip
-pg_search-x86_64-unknown-linux-gnu-pg17.tar.gz
-```
+- **Automatic tracking** -- a daily cron checks for new ParadeDB releases and repackages on detection, no manual intervention needed.
+- **Two platforms** -- builds for macOS ARM64 (`aarch64-apple-darwin`) and Linux x86_64 (`x86_64-unknown-linux-gnu`), each as `.zip` and `.tar.gz`.
+- **Stable release tags** -- versioned as `v0.{pg_major}.{run_number}`, with the upstream pg_search version recorded in the release body.
+- **Minimal footprint** -- ships only the shared library (`.dylib`/`.so`), control file, and migration SQL. Nothing else.
 
-Release tags follow the pattern `v0.{pg_major}.{run_number}` (e.g., `v0.17.1`). The release body includes the upstream ParadeDB version.
+### How it works
 
-## Archive contents
+The workflow downloads the official `.pkg` (macOS) or `.deb` (Linux) from ParadeDB, extracts the extension files, and repacks them into a flat `lib/` + `share/extension/` layout. That archive is what postgresql-embedded resolves at runtime to install pg_search into an embedded Postgres instance.
 
-Each archive contains the extension files needed by PostgreSQL:
-
-```
-pg_search-{triple}-pg17/
-  lib/
-    pg_search.dylib   (macOS)
-    pg_search.so       (Linux)
-  share/
-    extension/
-      pg_search.control
-      pg_search--*.sql
-```
-
-## Usage with theseus-rs
-
-Register a custom `Repository` implementation pointing at this repo, then call `postgresql_extensions::install()`. See [contextlayer/pgx](https://github.com/usecontextlayer/pgx) for a working integration.
+MIT License
